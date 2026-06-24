@@ -50,6 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+.todo/
 
 # debug information files
 *.dwo
