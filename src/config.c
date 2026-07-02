@@ -1,8 +1,6 @@
 #include "config.h"
 
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
+#include <cjson/cJSON.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,14 +10,7 @@
 #define CONFIG_DEFAULT_RECURSIVE 1
 #define CONFIG_DEFAULT_MAX_DEPTH 0
 
-static const char *skip_ws(const char *s) {
-    while (*s != '\0' && isspace((unsigned char)*s) != 0) {
-        ++s;
-    }
-    return s;
-}
-
-static int copy_string(char *dst, size_t dst_len, const char *src) {
+static int copy_string_value(char *dst, size_t dst_len, const char *src) {
     size_t src_len;
 
     if (dst == NULL || src == NULL || dst_len == 0U) {
@@ -35,217 +26,138 @@ static int copy_string(char *dst, size_t dst_len, const char *src) {
     return 1;
 }
 
-static const char *find_key_value(const char *json, const char *key) {
-    char needle[128];
-    size_t key_len;
-    const char *p;
-
-    key_len = strlen(key);
-    if (key_len + 3U >= sizeof(needle)) {
-        return NULL;
-    }
-
-    needle[0] = '\"';
-    memcpy(needle + 1, key, key_len);
-    needle[key_len + 1U] = '\"';
-    needle[key_len + 2U] = '\0';
-
-    p = json;
-    while ((p = strstr(p, needle)) != NULL) {
-        const char *colon = skip_ws(p + key_len + 2U);
-        if (*colon == ':') {
-            return skip_ws(colon + 1);
-        }
-        p += key_len + 2U;
-    }
-
-    return NULL;
-}
-
-static int parse_json_string(const char *value, char *out, size_t out_len, const char **end_ptr) {
-    size_t written = 0U;
-    const char *p = value;
-
-    if (p == NULL || out == NULL || out_len == 0U || *p != '\"') {
-        return 0;
-    }
-
-    ++p;
-    while (*p != '\0' && *p != '\"') {
-        char c = *p;
-
-        if (c == '\\') {
-            ++p;
-            if (*p == '\0') {
-                return 0;
-            }
-            switch (*p) {
-                case '\\':
-                case '\"':
-                case '/':
-                    c = *p;
-                    break;
-                case 'n':
-                    c = '\n';
-                    break;
-                case 'r':
-                    c = '\r';
-                    break;
-                case 't':
-                    c = '\t';
-                    break;
-                case 'b':
-                    c = '\b';
-                    break;
-                case 'f':
-                    c = '\f';
-                    break;
-                default:
-                    return 0;
-            }
-        }
-
-        if (written + 1U >= out_len) {
-            return 0;
-        }
-
-        out[written++] = c;
-        ++p;
-    }
-
-    if (*p != '\"') {
-        return 0;
-    }
-
-    out[written] = '\0';
-    if (end_ptr != NULL) {
-        *end_ptr = p + 1;
-    }
-    return 1;
-}
-
-static int parse_json_int(const char *value, int *out) {
-    char *end = NULL;
-    long parsed;
-
-    if (value == NULL || out == NULL) {
-        return 0;
-    }
-
-    errno = 0;
-    parsed = strtol(value, &end, 10);
-    if (end == value || errno != 0) {
-        return 0;
-    }
-
-    end = (char *)skip_ws(end);
-    if (*end != ',' && *end != '}' && *end != ']' && *end != '\0') {
-        return 0;
-    }
-
-    if (parsed < INT_MIN || parsed > INT_MAX) {
-        return 0;
-    }
-
-    *out = (int)parsed;
-    return 1;
-}
-
-static int parse_json_bool(const char *value, int *out) {
-    if (value == NULL || out == NULL) {
-        return 0;
-    }
-
-    if (strncmp(value, "true", 4) == 0) {
-        *out = 1;
-        return 1;
-    }
-
-    if (strncmp(value, "false", 5) == 0) {
-        *out = 0;
-        return 1;
-    }
-
-    return 0;
-}
-
-static int parse_json_string_array(
-    const char *value,
-    char out[CONFIG_MAX_PATTERNS][CONFIG_MAX_STR],
-    int *out_count
+static app_error_t copy_required_string(
+    const cJSON *obj,
+    const char *key,
+    char *out,
+    size_t out_len
 ) {
-    const char *p = skip_ws(value);
-    int count = 0;
+    const cJSON *item;
 
-    if (p == NULL || out == NULL || out_count == NULL || *p != '[') {
-        return 0;
+    if (obj == NULL || key == NULL || out == NULL || out_len == 0U) {
+        return APP_ERR_INVALID_ARG;
     }
 
-    p = skip_ws(p + 1);
-    if (*p == ']') {
-        *out_count = 0;
-        return 1;
+    item = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
+    if (!cJSON_IsString(item) || item->valuestring == NULL || item->valuestring[0] == '\0') {
+        return APP_ERR_CONFIG;
     }
 
-    while (*p != '\0') {
-        if (count >= CONFIG_MAX_PATTERNS) {
-            return 0;
-        }
-
-        if (!parse_json_string(p, out[count], CONFIG_MAX_STR, &p)) {
-            return 0;
-        }
-        ++count;
-
-        p = skip_ws(p);
-        if (*p == ']') {
-            *out_count = count;
-            return 1;
-        }
-        if (*p != ',') {
-            return 0;
-        }
-        p = skip_ws(p + 1);
+    if (!copy_string_value(out, out_len, item->valuestring)) {
+        return APP_ERR_CONFIG;
     }
 
-    return 0;
+    return APP_OK;
 }
 
-static int json_get_string(const char *json, const char *key, char *out, size_t out_len) {
-    const char *value = find_key_value(json, key);
-    if (value == NULL) {
-        return 0;
+static app_error_t copy_optional_string(
+    const cJSON *obj,
+    const char *key,
+    char *out,
+    size_t out_len
+) {
+    const cJSON *item;
+
+    if (obj == NULL || key == NULL || out == NULL || out_len == 0U) {
+        return APP_ERR_INVALID_ARG;
     }
-    return parse_json_string(value, out, out_len, NULL);
+
+    item = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
+    if (item == NULL) {
+        return APP_OK;
+    }
+
+    if (!cJSON_IsString(item) || item->valuestring == NULL) {
+        return APP_ERR_CONFIG;
+    }
+
+    if (!copy_string_value(out, out_len, item->valuestring)) {
+        return APP_ERR_CONFIG;
+    }
+
+    return APP_OK;
 }
 
-static int json_get_int(const char *json, const char *key, int *out) {
-    const char *value = find_key_value(json, key);
-    if (value == NULL) {
-        return 0;
+static app_error_t copy_optional_int(const cJSON *obj, const char *key, int *out) {
+    const cJSON *item;
+
+    if (obj == NULL || key == NULL || out == NULL) {
+        return APP_ERR_INVALID_ARG;
     }
-    return parse_json_int(value, out);
+
+    item = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
+    if (item == NULL) {
+        return APP_OK;
+    }
+
+    if (!cJSON_IsNumber(item)) {
+        return APP_ERR_CONFIG;
+    }
+
+    *out = item->valueint;
+    return APP_OK;
 }
 
-static int json_get_bool(const char *json, const char *key, int *out) {
-    const char *value = find_key_value(json, key);
-    if (value == NULL) {
-        return 0;
+static app_error_t copy_optional_bool(const cJSON *obj, const char *key, int *out) {
+    const cJSON *item;
+
+    if (obj == NULL || key == NULL || out == NULL) {
+        return APP_ERR_INVALID_ARG;
     }
-    return parse_json_bool(value, out);
+
+    item = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
+    if (item == NULL) {
+        return APP_OK;
+    }
+
+    if (!cJSON_IsBool(item)) {
+        return APP_ERR_CONFIG;
+    }
+
+    *out = cJSON_IsTrue(item) ? 1 : 0;
+    return APP_OK;
 }
 
-static int json_get_string_array(
-    const char *json,
+static app_error_t copy_optional_string_array(
+    const cJSON *obj,
     const char *key,
     char out[CONFIG_MAX_PATTERNS][CONFIG_MAX_STR],
     int *out_count
 ) {
-    const char *value = find_key_value(json, key);
-    if (value == NULL) {
-        return 0;
+    const cJSON *arr;
+    int i;
+    int arr_size;
+
+    if (obj == NULL || key == NULL || out == NULL || out_count == NULL) {
+        return APP_ERR_INVALID_ARG;
     }
-    return parse_json_string_array(value, out, out_count);
+
+    arr = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
+    if (arr == NULL) {
+        return APP_OK;
+    }
+
+    if (!cJSON_IsArray(arr)) {
+        return APP_ERR_CONFIG;
+    }
+
+    arr_size = cJSON_GetArraySize(arr);
+    if (arr_size < 0 || arr_size > CONFIG_MAX_PATTERNS) {
+        return APP_ERR_CONFIG;
+    }
+
+    for (i = 0; i < arr_size; ++i) {
+        const cJSON *entry = cJSON_GetArrayItem((cJSON *)arr, i);
+        if (!cJSON_IsString(entry) || entry->valuestring == NULL) {
+            return APP_ERR_CONFIG;
+        }
+        if (!copy_string_value(out[i], CONFIG_MAX_STR, entry->valuestring)) {
+            return APP_ERR_CONFIG;
+        }
+    }
+
+    *out_count = arr_size;
+    return APP_OK;
 }
 
 static app_error_t validate_config(const app_config_t *config) {
@@ -273,6 +185,164 @@ static app_error_t validate_config(const app_config_t *config) {
     if (config->password[0] == '\0' && config->ssh_key_path[0] == '\0') {
         return APP_ERR_CONFIG;
     }
+    return APP_OK;
+}
+
+static app_error_t parse_config_json(const char *json, app_config_t *out_cfg) {
+    cJSON *root = NULL;
+    cJSON *sftp = NULL;
+    cJSON *watch = NULL;
+    cJSON *download = NULL;
+    cJSON *logging = NULL;
+    cJSON *auth = NULL;
+    app_error_t err = APP_OK;
+
+    if (json == NULL || out_cfg == NULL) {
+        return APP_ERR_INVALID_ARG;
+    }
+
+    root = cJSON_Parse(json);
+    if (root == NULL || !cJSON_IsObject(root)) {
+        if (root != NULL) {
+            cJSON_Delete(root);
+        }
+        return APP_ERR_CONFIG;
+    }
+
+    sftp = cJSON_GetObjectItemCaseSensitive(root, "sftp");
+    if (!cJSON_IsObject(sftp)) {
+        cJSON_Delete(root);
+        return APP_ERR_CONFIG;
+    }
+
+    err = copy_required_string(sftp, "host", out_cfg->host, sizeof(out_cfg->host));
+    if (err != APP_OK) {
+        cJSON_Delete(root);
+        return err;
+    }
+
+    err = copy_optional_int(sftp, "port", &out_cfg->port);
+    if (err != APP_OK) {
+        cJSON_Delete(root);
+        return err;
+    }
+
+    err = copy_required_string(sftp, "username", out_cfg->username, sizeof(out_cfg->username));
+    if (err != APP_OK) {
+        cJSON_Delete(root);
+        return err;
+    }
+
+    err = copy_required_string(sftp, "remote_dir", out_cfg->remote_dir, sizeof(out_cfg->remote_dir));
+    if (err != APP_OK) {
+        cJSON_Delete(root);
+        return err;
+    }
+
+    auth = cJSON_GetObjectItemCaseSensitive(sftp, "auth");
+    if (auth != NULL) {
+        if (!cJSON_IsObject(auth)) {
+            cJSON_Delete(root);
+            return APP_ERR_CONFIG;
+        }
+        err = copy_optional_string(auth, "password", out_cfg->password, sizeof(out_cfg->password));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_string(auth, "ssh_key_path", out_cfg->ssh_key_path, sizeof(out_cfg->ssh_key_path));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+    } else {
+        err = copy_optional_string(sftp, "password", out_cfg->password, sizeof(out_cfg->password));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_string(sftp, "ssh_key_path", out_cfg->ssh_key_path, sizeof(out_cfg->ssh_key_path));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+    }
+
+    download = cJSON_GetObjectItemCaseSensitive(root, "download");
+    if (!cJSON_IsObject(download)) {
+        cJSON_Delete(root);
+        return APP_ERR_CONFIG;
+    }
+
+    err = copy_required_string(download, "local_root", out_cfg->local_download_root, sizeof(out_cfg->local_download_root));
+    if (err != APP_OK) {
+        cJSON_Delete(root);
+        return err;
+    }
+
+    watch = cJSON_GetObjectItemCaseSensitive(root, "watch");
+    if (watch != NULL) {
+        if (!cJSON_IsObject(watch)) {
+            cJSON_Delete(root);
+            return APP_ERR_CONFIG;
+        }
+
+        err = copy_optional_int(watch, "poll_interval_seconds", &out_cfg->poll_interval_seconds);
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_bool(watch, "recursive", &out_cfg->recursive);
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_int(watch, "max_depth", &out_cfg->max_depth);
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_string_array(
+            watch,
+            "include_patterns",
+            out_cfg->include_patterns,
+            &out_cfg->include_pattern_count
+        );
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_string_array(
+            watch,
+            "exclude_patterns",
+            out_cfg->exclude_patterns,
+            &out_cfg->exclude_pattern_count
+        );
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+    }
+
+    logging = cJSON_GetObjectItemCaseSensitive(root, "logging");
+    if (logging != NULL) {
+        if (!cJSON_IsObject(logging)) {
+            cJSON_Delete(root);
+            return APP_ERR_CONFIG;
+        }
+        err = copy_optional_string(logging, "level", out_cfg->log_level, sizeof(out_cfg->log_level));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+        err = copy_optional_string(logging, "destination", out_cfg->log_destination, sizeof(out_cfg->log_destination));
+        if (err != APP_OK) {
+            cJSON_Delete(root);
+            return err;
+        }
+    }
+
+    cJSON_Delete(root);
     return APP_OK;
 }
 
@@ -338,10 +408,10 @@ app_error_t config_load(const char *path, app_config_t *out_config) {
     cfg.poll_interval_seconds = CONFIG_DEFAULT_POLL_SECONDS;
     cfg.recursive = CONFIG_DEFAULT_RECURSIVE;
     cfg.max_depth = CONFIG_DEFAULT_MAX_DEPTH;
-    if (!copy_string(cfg.log_level, sizeof(cfg.log_level), "info")) {
+    if (!copy_string_value(cfg.log_level, sizeof(cfg.log_level), "info")) {
         return APP_ERR_UNKNOWN;
     }
-    if (!copy_string(cfg.log_destination, sizeof(cfg.log_destination), "stderr")) {
+    if (!copy_string_value(cfg.log_destination, sizeof(cfg.log_destination), "stderr")) {
         return APP_ERR_UNKNOWN;
     }
 
@@ -350,38 +420,10 @@ app_error_t config_load(const char *path, app_config_t *out_config) {
         return err;
     }
 
-    (void)json_get_string(json, "host", cfg.host, sizeof(cfg.host));
-    (void)json_get_int(json, "port", &cfg.port);
-    (void)json_get_string(json, "username", cfg.username, sizeof(cfg.username));
-    (void)json_get_string(json, "password", cfg.password, sizeof(cfg.password));
-    (void)json_get_string(json, "ssh_key_path", cfg.ssh_key_path, sizeof(cfg.ssh_key_path));
-    (void)json_get_string(json, "remote_dir", cfg.remote_dir, sizeof(cfg.remote_dir));
-
-    if (!json_get_string(json, "local_root", cfg.local_download_root, sizeof(cfg.local_download_root))) {
-        (void)json_get_string(
-            json,
-            "local_download_root",
-            cfg.local_download_root,
-            sizeof(cfg.local_download_root)
-        );
-    }
-
-    (void)json_get_int(json, "poll_interval_seconds", &cfg.poll_interval_seconds);
-    (void)json_get_bool(json, "recursive", &cfg.recursive);
-    (void)json_get_int(json, "max_depth", &cfg.max_depth);
-    (void)json_get_string(json, "log_level", cfg.log_level, sizeof(cfg.log_level));
-    (void)json_get_string(json, "destination", cfg.log_destination, sizeof(cfg.log_destination));
-
-    if (find_key_value(json, "include_patterns") != NULL &&
-        !json_get_string_array(json, "include_patterns", cfg.include_patterns, &cfg.include_pattern_count)) {
+    err = parse_config_json(json, &cfg);
+    if (err != APP_OK) {
         free(json);
-        return APP_ERR_CONFIG;
-    }
-
-    if (find_key_value(json, "exclude_patterns") != NULL &&
-        !json_get_string_array(json, "exclude_patterns", cfg.exclude_patterns, &cfg.exclude_pattern_count)) {
-        free(json);
-        return APP_ERR_CONFIG;
+        return err;
     }
 
     free(json);
