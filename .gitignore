@@ -4,6 +4,9 @@
 # Build output
 bin/
 
+#Agents
+.github/
+
 # Object files
 *.o
 *.ko
