@@ -1,0 +1,27 @@
+{
+  "sftp": {
+    "host": "example.com",
+    "port": 22,
+    "username": "user",
+    "auth": {
+      "method": "password",
+      "password": "${SFTP_PASSWORD}",
+      "ssh_key_path": "~/.ssh/id_rsa"
+    },
+    "remote_dir": "/remote/path"
+  },
+  "watch": {
+    "poll_interval_seconds": 30,
+    "recursive": true,
+    "max_depth": 2,
+    "include_patterns": ["*.log"],
+    "exclude_patterns": []
+  },
+  "download": {
+    "local_root": "./downloads"
+  },
+  "logging": {
+    "level": "info",
+    "destination": "stderr"
+  }
+}
