@@ -22,7 +22,9 @@ bin/obj/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 test:
-	@echo "Test scaffold only. No tests implemented yet."
+	@mkdir -p bin
+	$(CC) $(CFLAGS) tests/test_config.c src/config.c src/app_error.c -o bin/test_config
+	./bin/test_config
 
 clean:
 	rm -rf bin
