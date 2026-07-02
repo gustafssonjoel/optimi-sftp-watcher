@@ -1,7 +1,7 @@
 CC := cc
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Iinclude
 LDFLAGS :=
-LDLIBS := -lcurl
+LDLIBS := -lcurl -lcjson
 
 SRC := $(wildcard src/*.c)
 OBJ := $(patsubst src/%.c,bin/obj/%.o,$(SRC))
@@ -23,7 +23,7 @@ bin/obj/%.o: src/%.c
 
 test:
 	@mkdir -p bin
-	$(CC) $(CFLAGS) tests/test_config.c src/config.c src/app_error.c -o bin/test_config
+	$(CC) $(CFLAGS) tests/test_config.c src/config.c src/app_error.c $(LDFLAGS) $(LDLIBS) -o bin/test_config
 	./bin/test_config
 
 clean:
