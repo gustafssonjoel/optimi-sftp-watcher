@@ -90,10 +90,12 @@ static app_error_t load_from_json(const char *json, app_config_t *out_cfg) {
 static void test_config_rejects_missing_host(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"username\":\"alice\"," 
-        "\"password\":\"pw\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\""
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -103,10 +105,12 @@ static void test_config_rejects_missing_host(void) {
 static void test_config_rejects_missing_remote_dir(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"password\":\"pw\"," 
-        "\"local_root\":\"./downloads\""
+        "\"auth\":{\"password\":\"pw\"}"
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -116,12 +120,14 @@ static void test_config_rejects_missing_remote_dir(void) {
 static void test_config_rejects_invalid_poll_interval(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"password\":\"pw\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\"," 
-        "\"poll_interval_seconds\":0"
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"watch\":{\"poll_interval_seconds\":0},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -131,12 +137,14 @@ static void test_config_rejects_invalid_poll_interval(void) {
 static void test_config_rejects_invalid_max_depth(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"password\":\"pw\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\"," 
-        "\"max_depth\":-1"
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"watch\":{\"max_depth\":-1},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -146,10 +154,12 @@ static void test_config_rejects_invalid_max_depth(void) {
 static void test_config_rejects_empty_credentials(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\""
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -159,15 +169,19 @@ static void test_config_rejects_empty_credentials(void) {
 static void test_config_accepts_password_auth_config(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"port\":2022," 
         "\"username\":\"alice\"," 
-        "\"password\":\"secret\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\"," 
+        "\"auth\":{\"password\":\"secret\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"watch\":{"
         "\"poll_interval_seconds\":15," 
         "\"recursive\":false," 
         "\"max_depth\":4"
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -182,11 +196,13 @@ static void test_config_accepts_password_auth_config(void) {
 static void test_config_accepts_ssh_key_auth_config(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"ssh_key_path\":\"~/.ssh/id_rsa\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\""
+        "\"auth\":{\"ssh_key_path\":\"~/.ssh/id_rsa\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -198,11 +214,13 @@ static void test_config_accepts_ssh_key_auth_config(void) {
 static void test_config_accepts_valid_minimal_config(void) {
     const char *json =
         "{"
+        "\"sftp\":{"
         "\"host\":\"example.com\"," 
         "\"username\":\"alice\"," 
-        "\"password\":\"pw\"," 
-        "\"remote_dir\":\"/incoming\"," 
-        "\"local_root\":\"./downloads\""
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
         "}";
     app_config_t cfg;
 
@@ -213,6 +231,57 @@ static void test_config_accepts_valid_minimal_config(void) {
     EXPECT_EQ_INT(cfg.max_depth, 0);
     EXPECT_EQ_INT(cfg.include_pattern_count, 0);
     EXPECT_EQ_INT(cfg.exclude_pattern_count, 0);
+}
+
+static void test_config_rejects_invalid_port_type(void) {
+    const char *json =
+        "{"
+        "\"sftp\":{"
+        "\"host\":\"example.com\"," 
+        "\"port\":\"22\"," 
+        "\"username\":\"alice\"," 
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
+        "}";
+    app_config_t cfg;
+
+    EXPECT_EQ_INT(load_from_json(json, &cfg), APP_ERR_CONFIG);
+}
+
+static void test_config_rejects_invalid_recursive_type(void) {
+    const char *json =
+        "{"
+        "\"sftp\":{"
+        "\"host\":\"example.com\"," 
+        "\"username\":\"alice\"," 
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"watch\":{\"recursive\":\"true\"},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
+        "}";
+    app_config_t cfg;
+
+    EXPECT_EQ_INT(load_from_json(json, &cfg), APP_ERR_CONFIG);
+}
+
+static void test_config_rejects_invalid_include_patterns_type(void) {
+    const char *json =
+        "{"
+        "\"sftp\":{"
+        "\"host\":\"example.com\"," 
+        "\"username\":\"alice\"," 
+        "\"auth\":{\"password\":\"pw\"},"
+        "\"remote_dir\":\"/incoming\""
+        "},"
+        "\"watch\":{\"include_patterns\":[\"*.log\",1]},"
+        "\"download\":{\"local_root\":\"./downloads\"}"
+        "}";
+    app_config_t cfg;
+
+    EXPECT_EQ_INT(load_from_json(json, &cfg), APP_ERR_CONFIG);
 }
 
 int main(void) {
@@ -226,6 +295,9 @@ int main(void) {
         {"test_config_accepts_password_auth_config", test_config_accepts_password_auth_config},
         {"test_config_accepts_ssh_key_auth_config", test_config_accepts_ssh_key_auth_config},
         {"test_config_accepts_valid_minimal_config", test_config_accepts_valid_minimal_config},
+        {"test_config_rejects_invalid_port_type", test_config_rejects_invalid_port_type},
+        {"test_config_rejects_invalid_recursive_type", test_config_rejects_invalid_recursive_type},
+        {"test_config_rejects_invalid_include_patterns_type", test_config_rejects_invalid_include_patterns_type},
     };
 
     for (i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
